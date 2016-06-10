@@ -110,8 +110,21 @@ class MongogfsBrowser(AggregationBrowser):
 
     def provide_aggregate(self, cell, aggregates, drilldown, split, order,
                           page, page_size, **options):
-
+        print "\n"
+        print "mongodbgfs backend browser.py -- provide_aggregate \n cell : %s \n aggregates : %s \n drilldown : %s \n split : %s \n order : %s \n page : %s \n page_size : %s" % (cell, aggregates, drilldown, split, order, page, page_size)
+        print "\n"
+        # http://cubes.readthedocs.io/en/v1.0.1/reference/browser.html#result
+        # Prima vine creato un object AggregationResult praticamente vuoto
+        # poi viene riempito - Implementors of aggregation browsers should populate
+        #  cell, measures and levels from the aggregate query.
+        # e poi ritornato come object
+        # The result of aggregated browsing is returned as object
+        # AggregationResult ritorna il summary "summary": {"record_count": 2, "smsin_sum": 6.0} ed i valori
         result = AggregationResult(cell=cell, aggregates=aggregates)
+
+        print "AggregationResult - before"
+        print result.to_dict()
+        print "\n"
 
         drilldown_levels = None
 
@@ -136,6 +149,7 @@ class MongogfsBrowser(AggregationBrowser):
                                                             split,
                                                             available_aggregate_functions())
 
+        # AggregationResult ritorna il summary "summary": {"record_count": 2, "smsin_sum": 6.0} ed i valori/items
         summary, items = self._do_aggregation_query(cell=cell,
                                                     aggregates=aggregates,
                                                     attributes=None,
@@ -143,6 +157,17 @@ class MongogfsBrowser(AggregationBrowser):
                                                     split=split, order=order,
                                                     page=page,
                                                     page_size=page_size)
+
+        # gfssummary, gfsitems = self._do_aggregation_query_gfs(cell=cell,
+        #                                             aggregates=aggregates,
+        #                                             attributes=None,
+        #                                             drilldown=drilldown,
+        #                                             split=split, order=order,
+        #                                             page=page,
+        #                                             page_size=page_size)
+
+        print "if empty array no drilldown was requested"
+        print items
         result.cells = iter(items)
         result.summary = summary or {}
         # add calculated measures w/o drilldown or split if no drilldown or split
@@ -157,11 +182,18 @@ class MongogfsBrowser(AggregationBrowser):
 
         labels += [ str(m) for m in aggregates ]
         result.labels = labels
+
+        print "\n"
+        print "AggregationResult - after"
+        print result.to_dict()
+        print "\n"
         return result
 
     def is_builtin_function(self, function_name, aggregate):
         return function_name in available_aggregate_functions()
 
+    # Serve per implementare /cube/<name>/facts – list facts within a cell
+    # vedi https://pythonhosted.org/cubes/server.html#aggregation-and-browsing
     def facts(self, cell=None, fields=None, order=None, page=None, page_size=None,
               **options):
         """Return facts iterator."""
@@ -198,6 +230,8 @@ class MongogfsBrowser(AggregationBrowser):
 
         return facts
 
+    # Serve per implementare /cube/<name>/fact – return a single fact
+    # vedi https://pythonhosted.org/cubes/server.html#aggregation-and-browsing
     def fact(self, key):
         # TODO make it possible to have a fact key that is not an ObjectId
         key_field = self.mapper.physical(self.mapper.attribute(self.cube.key))
@@ -211,6 +245,8 @@ class MongogfsBrowser(AggregationBrowser):
             item = to_json_safe(item)
         return item
 
+    # Serve per implementare /cube/<name>/members/<dim> – list dimension members
+    # vedi https://pythonhosted.org/cubes/server.html#aggregation-and-browsing
     def provide_members(self, cell, dimension, depth=None, hierarchy=None,
                         levels=None, attributes=None, page=None,
                         page_size=None, order=None):
@@ -253,9 +289,9 @@ class MongogfsBrowser(AggregationBrowser):
         """Returns a tuple (`query`, `fields`). If `for_project` is `True`,
         then the values are transformed using `project`, otherwise they are
         transformed usin the `match` expression."""
-        print "\n"
-        print "mongodbgfs backend browser.py -- _build_query_and_fields \n cell : %s \n attributes : %s \n for_project : %s" % (cell, attributes, for_project)
-        print "\n"
+        # print "\n"
+        # print "mongodbgfs backend browser.py -- _build_query_and_fields \n cell : %s \n attributes : %s \n for_project : %s" % (cell, attributes, for_project)
+        # print "\n"
         find_clauses = []
         query = {}
 
@@ -289,11 +325,11 @@ class MongogfsBrowser(AggregationBrowser):
 
             fields[escape_level(attribute.ref())] = expr
 
-        print "\n"
-        print(query)
-        print "\n"
-        print(fields)
-        print "\n"
+        # print "query"
+        # print(query)
+        # print "fields"
+        # print(fields)
+        # print "\n"
         return query, fields
 
     def _build_query_and_fields_gfs(self, cell, attributes, for_project=False):
@@ -301,43 +337,90 @@ class MongogfsBrowser(AggregationBrowser):
         print "mongodbgfs backend browser.py -- _build_query_and_fields_gfs \n cell : %s \n attributes : %s \n for_project : %s" % (cell, attributes, for_project)
         print "\n"
 
-        # grdid_out = self.fs.get(ObjectId('573ed7a51d41c809254d7d1b'))
-        # print(grdout.length)
-        # contents = grid_out.read()
-        grid_out = self.fsbucket.open_download_stream_by_name("mdd_test.tif")
-        # Use a virtual memory file, which is named like this
-        vsipath = '/vsimem/from_mongodb'
+        # I parametri che ho a disposizione per costruire la query sono dati dal
+        # elemento su cui ho effettuato il cut
+        # - cell : metadata.cc
 
-        # http://gis.stackexchange.com/questions/130139/downloading-raster-data-into-python-from-postgis-using-psycopg2
-        # http://gis.stackexchange.com/questions/75891/in-python-reading-a-gdal-raster-from-memory-instead-of-a-file
-        # http://erouault.blogspot.it/2012/05/new-gdal-virtual-file-system-to-read.html
-        # GDAL has a Memory Driver and a PostGIS driver. ???
+        find_clauses = []
+        ids = []
+        for cut in cell.cuts:
+            find_clauses += self._query_conditions_for_cut(cut, for_project)
 
-        gdal.FileFromMemBuffer(vsipath, grid_out.read())
-        ds = gdal.Open(vsipath)
+        print find_clauses
+        # ricavo tutti gli _id dove metadata.cc corrisponde al valore passato
+        # id_list = self.data_store.find(find_clauses[0])
+        # print id_list
+        for id_list in self.data_store.find(find_clauses[0]) :
+            ids.append(id_list['_id'])
 
-        print ds.GetMetadata()
-        print "[ RASTER BAND COUNT ]: ", ds.RasterCount
+        return ids
 
-        # get the band2 data array
-        # Questo dipende dalla dimension su cui voglio fare l'aggregate
-        band = ds.GetRasterBand(2)
-        arr = band.ReadAsArray()
-        # Close and clean up virtual memory file
-        ds = band = None
-        gdal.Unlink(vsipath)
-
-        return arr
-
-    def _do_aggregation_query(self, cell, aggregates, attributes, drilldown,
+    def _do_aggregation_query_gfs(self, cell, aggregates, attributes, drilldown,
                               split, order, page, page_size):
         print "\n"
-        print "mongodbgfs backend browser.py -- _do_aggregation_query \n cell : %s \n aggregates : %s \n attributes : %s \n drilldown : %s \n split : %s \n order : %s \n page : %s \n page_size : %s" % (cell, aggregates, attributes, drilldown, split, order, page, page_size)
+        print "mongodbgfs backend browser.py -- _do_aggregation_query_gfs \n cell : %s \n aggregates : %s \n attributes : %s \n drilldown : %s \n split : %s \n order : %s \n page : %s \n page_size : %s" % (cell, aggregates, attributes, drilldown, split, order, page, page_size)
         print "\n"
         # determine query for cell cut
-        query_obj, fields_obj = self._build_query_and_fields(cell, attributes)
+
+
         test = self._build_query_and_fields_gfs(cell, attributes)
         print test
+
+        # agg_array = []
+        count = 0
+        for objectid in test:
+            grid_out = self.fs.get(objectid)
+            # # print(grdout.length)
+            # # contents = grid_out.read()
+            # grid_out = self.fsbucket.open_download_stream_by_name("mdd_test_2.tif")
+            # # Use a virtual memory file, which is named like this
+            vsipath = '/vsimem/from_mongodb'
+            #
+            # # http://gis.stackexchange.com/questions/130139/downloading-raster-data-into-python-from-postgis-using-psycopg2
+            # # http://gis.stackexchange.com/questions/75891/in-python-reading-a-gdal-raster-from-memory-instead-of-a-file
+            # # http://erouault.blogspot.it/2012/05/new-gdal-virtual-file-system-to-read.html
+            # # GDAL has a Memory Driver and a PostGIS driver. ???
+            #
+            gdal.FileFromMemBuffer(vsipath, grid_out.read())
+            ds = gdal.Open(vsipath)
+            #
+            # print ds.GetMetadata()
+            # print "[ RASTER BAND COUNT ]: ", ds.RasterCount
+            #
+            # # get the band2 data array
+            # # Bisogna implmentare il parametro per definire quale band estrarre
+            band = ds.GetRasterBand(2)
+            arr = band.ReadAsArray()
+            print arr.shape
+            if count == 0 :
+                 agg_array = arr
+                 count = 1
+            else :
+                 agg_array += arr
+
+            # # Close and clean up virtual memory file
+            ds = band = None
+            gdal.Unlink(vsipath)
+
+        print agg_array.shape
+        print agg_array
+        # return agg_array
+        # ritorna -summary- AggregationResult attribute
+        # e -items==cells- AggregationResult attribute
+        # verso provide_aggregate
+        # se non si richiesto un drilldown cells is empty che is il nostro caso
+        return (agg_array, [])
+
+        # TODO Nota che rispetto a provide_aggrgate abbiamo il parametro attributes in plus
+    def _do_aggregation_query(self, cell, aggregates, attributes, drilldown,
+                              split, order, page, page_size):
+        # print "\n"
+        # print "mongodbgfs backend browser.py -- _do_aggregation_query \n cell : %s \n aggregates : %s \n attributes : %s \n drilldown : %s \n split : %s \n order : %s \n page : %s \n page_size : %s" % (cell, aggregates, attributes, drilldown, split, order, page, page_size)
+        # print "\n"
+        # determine query for cell cut
+        query_obj, fields_obj = self._build_query_and_fields(cell, attributes)
+        # test = self._build_query_and_fields_gfs(cell, attributes)
+        # print test
 
         # If no drilldown or split, only one measure, and only aggregations to
         # do on it are count or identity, no aggregation pipeline needed.
@@ -499,12 +582,12 @@ class MongogfsBrowser(AggregationBrowser):
         result_items = []
         self.logger.debug("PIPELINE: %s", pipeline)
         print "PIPELINE 2 : %s" %pipeline
-        test = self.data_store.aggregate(pipeline)
-        print "-------------"
-        print(list(test))
+        # test = self.data_store.aggregate(pipeline) # mongodb.aggregate query
+        # print "-------------"
+        # print(list(test))
         print "-------------"
         # results = self.data_store.aggregate(pipeline).get('result', [])
-        results = self.data_store.aggregate(pipeline)
+        results = self.data_store.aggregate(pipeline) # mongodb.aggregate query
         results = [date_transform(r) for r in results]
 
         print(results)
@@ -591,7 +674,13 @@ class MongogfsBrowser(AggregationBrowser):
             for agg_fn_pair in aggregate_fn_pairs:
                 new_item[ unescape_level(agg_fn_pair[0]) ] = item [ agg_fn_pair[0] ]
             result_items.append(new_item)
-
+        print"_do_aggregation_query result_items"
+        print (result_items)
+        print "\n"
+        # ritorna -summary- AggregationResult attribute
+        # e -items==cells- AggregationResult attribute
+        # verso provide_aggregate
+        # se non si richiesto un drilldown cells is empty che is il nostro caso
         return (None, result_items) if (drilldown or split) else (result_items[0], [])
 
     def _build_date_for_cut(self, hier, path, is_end=False):
