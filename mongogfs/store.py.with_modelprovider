@@ -1,0 +1,162 @@
+# -*- coding=utf -*-
+from ...stores import Store
+from ...providers import ModelProvider
+from ...model import Cube, create_dimension, aggregate_list, create_cube
+import pymongo
+import gridfs
+import gdal
+import ogr
+import osr
+
+__all__ = []
+
+GA_TIME_DIM_METADATA = {
+    "name": "time",
+    "role": "time",
+    "levels": [
+        { "name": "year", "label": "Year" },
+        { "name": "month", "label": "Month", "info": { "aggregation_units": 3 }},
+        { "name": "day", "label": "Day", "info": { "aggregation_units": 7 } },
+    ],
+    "hierarchies": [
+        {"name": "ymd", "levels": ["year", "month", "day"]},
+    ],
+    "default_hierarchy_name": "ymd"
+}
+
+
+class MongogfsModelProvider(ModelProvider):
+    def __init__(self, *args, **kwargs):
+        super(MongogfsModelProvider, self).__init__(*args, **kwargs)
+
+        self.default_cube = ["fs"] # this is the default gridFS bucket name
+
+    # optional (but should be implemented in this case) method
+
+    # Some providers might require a database connection or an API credentials
+    # that might be shared by the data store containing the actual cube data.
+    # In this case the model provider should implement method requires_store()
+    # and return True.
+    # The provider’s initialize_from_store() will be called back at some point
+    # before first cube is retrieved.
+    # The provider will have store instance variable available with
+    # cubes.Store object instance.
+    def requires_store(self):
+        return True
+
+    def initialize_from_store(self):
+        self._refresh_metadata()
+
+    # optional method
+    def public_dimensions(self):
+        return []
+
+    def _refresh_metadata(self):
+        """Load gridFS metadata. gdal extract dimensions """
+        print("\n"
+              "Load gridFS metadata. gdal extract dimensions \n"
+              "==================================================")
+        mngc = self.store.client
+        db   = self.store.database
+
+        mngcdb = mngc[db] # create a Database object - it is the connection
+
+        print(mngcdb)
+        # print(mngcdb.fs.files.find())
+        fs = gridfs.GridFS(mngcdb)
+        filelist = list(mngcdb.fs.files.find());
+        print(filelist)
+        file_id = filelist[0]['_id']
+        grdout = fs.get(file_id)
+
+        print(grdout.length)
+        # contents = grid_out.read()
+
+        # Use a virtual memory file, which is named like this
+            
+        vsipath = '/vsimem/from_mongodb'
+
+        # http://gis.stackexchange.com/questions/130139/downloading-raster-data-into-python-from-postgis-using-psycopg2
+        # http://gis.stackexchange.com/questions/75891/in-python-reading-a-gdal-raster-from-memory-instead-of-a-file
+        # http://erouault.blogspot.it/2012/05/new-gdal-virtual-file-system-to-read.html
+        # GDAL has a Memory Driver and a PostGIS driver. ???
+
+        gdal.FileFromMemBuffer(vsipath, grdout.read())
+        ds = gdal.Open(vsipath)
+
+        print ds.GetMetadata()
+        print "[ RASTER BAND COUNT ]: ", ds.RasterCount
+
+    # required method
+    def cube(self, name, locale=None):
+        """Create a Mongo gridFS cube:
+
+        * Hp. the cube is a gridFS bucket
+        * GridFS places the collections in a common bucket by prefixing each with the bucket name.
+        * metric is cube aggregate
+        * dimension is cube dimension
+        """
+        if not name in self.default_cube:
+            raise NoSuchCubeError("Unknown cube '%s'" % name, name)
+
+        metadata = {
+            "name": name,
+            "linked_dimensions": ["date"],
+            "measures": ["amount"],
+            "aggregats": [
+                {"name": "amount_sum", "measure": "amount", "function": "sum"},
+                {"name": "record_count", "function": "count"}
+            ]
+        }
+
+        return create_cube(metadata)
+
+    # required method
+    def dimension(self, name, templates=[], locale=None):
+        try:
+            metadata = self.dimension_metadata(name)
+        except NoSuchDimensionError:
+            metadata = {}
+
+        if name == "time":
+            return create_dimension(GA_TIME_DIM_METADATA)
+
+
+
+    # required method
+    def list_cubes(self):
+        """List mongo GridFS cubes – groups of metrics and dimensions."""
+        # TODO: use an option how to look at GA – what are cubes?
+
+        cubes = []
+        for cube_name in self.default_cube:
+            #
+            # try:
+            #     metadata = self.cube_metadata(cube_name)
+            # except NoSuchCubeError:
+            #     metadata = {}
+            #
+            # label = self.cube_to_group[cube_name]
+            cube = {
+                "name": cube_name
+                # "label": metadata.get("label", label),
+                # "category": metadata.get("category", self.store.category)
+            }
+            cubes.append(cube)
+
+        return cubes
+
+class MongogfsStore(Store):
+    def __init__(self, url, database=None, collection=None, bucket=None, **options):
+
+        super(MongogfsStore, self).__init__(**options)
+
+        # self.client = pymongo.MongoClient(url, read_preference=pymongo.read_preferences.ReadPreference.SECONDARY)
+        self.client = pymongo.MongoClient(url)
+        self.database = database
+        # self.fs = gridfs.GridFS()
+        self.collection = collection
+        self.bucket = bucket
+        self.options = options
+        self.store_type = options['store_type']
+        # self.filesystem = gridfs.GridFS(database)
