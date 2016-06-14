@@ -57,7 +57,7 @@ class MongogfsBrowser(AggregationBrowser):
         if cube.browser_options.get('collection'):
             collection = cube.browser_options.get('collection')
 
-# Added bucket name option
+        # Added bucket name option
         bucket = store.bucket
         if cube.browser_options.get('bucket'):
             bucket = cube.browser_options.get('bucket')
@@ -65,7 +65,6 @@ class MongogfsBrowser(AggregationBrowser):
         fullcollectionname = bucket+'.'+collection
         self.data_store = store.client[database][fullcollectionname]
 
-        # TODO --------- Mod ilpise
         self.fs = gridfs.GridFS(store.client[database], collection=bucket)
 
         self.fsbucket = gridfs.GridFSBucket(store.client[database], bucket_name=bucket)
@@ -76,7 +75,6 @@ class MongogfsBrowser(AggregationBrowser):
 
         self.datesupport = MongoDateSupport(self.logger, calendar)
 
-        # print(self.cube.mappings)
         # if "__query__" in self.cube.mappings:
         #     self.logger.warn("mongo: __query__ in mappings is depreciated, "
         #                      "use browser_options.filter instead")
@@ -110,21 +108,8 @@ class MongogfsBrowser(AggregationBrowser):
 
     def provide_aggregate(self, cell, aggregates, drilldown, split, order,
                           page, page_size, **options):
-        print "\n"
-        print "mongodbgfs backend browser.py -- provide_aggregate \n cell : %s \n aggregates : %s \n drilldown : %s \n split : %s \n order : %s \n page : %s \n page_size : %s" % (cell, aggregates, drilldown, split, order, page, page_size)
-        print "\n"
-        # http://cubes.readthedocs.io/en/v1.0.1/reference/browser.html#result
-        # Prima vine creato un object AggregationResult praticamente vuoto
-        # poi viene riempito - Implementors of aggregation browsers should populate
-        #  cell, measures and levels from the aggregate query.
-        # e poi ritornato come object
-        # The result of aggregated browsing is returned as object
-        # AggregationResult ritorna il summary "summary": {"record_count": 2, "smsin_sum": 6.0} ed i valori
-        result = AggregationResult(cell=cell, aggregates=aggregates)
 
-        print "AggregationResult - before"
-        print result.to_dict()
-        print "\n"
+        result = AggregationResult(cell=cell, aggregates=aggregates)
 
         drilldown_levels = None
 
@@ -149,8 +134,9 @@ class MongogfsBrowser(AggregationBrowser):
                                                             split,
                                                             available_aggregate_functions())
 
-        # AggregationResult ritorna il summary "summary": {"record_count": 2, "smsin_sum": 6.0} ed i valori/items
-        summary, items = self._do_aggregation_query(cell=cell,
+        ## Summary and Items
+        ## -----------------
+        summary, items = self._do_aggregation_query_gfs(cell=cell,
                                                     aggregates=aggregates,
                                                     attributes=None,
                                                     drilldown=drilldown,
@@ -158,18 +144,9 @@ class MongogfsBrowser(AggregationBrowser):
                                                     page=page,
                                                     page_size=page_size)
 
-        # gfssummary, gfsitems = self._do_aggregation_query_gfs(cell=cell,
-        #                                             aggregates=aggregates,
-        #                                             attributes=None,
-        #                                             drilldown=drilldown,
-        #                                             split=split, order=order,
-        #                                             page=page,
-        #                                             page_size=page_size)
-
-        print "if empty array no drilldown was requested"
-        print items
         result.cells = iter(items)
         result.summary = summary or {}
+
         # add calculated measures w/o drilldown or split if no drilldown or split
         if not (drilldown or split):
             calculators = calculators_for_aggregates(self.cube,
@@ -183,17 +160,11 @@ class MongogfsBrowser(AggregationBrowser):
         labels += [ str(m) for m in aggregates ]
         result.labels = labels
 
-        print "\n"
-        print "AggregationResult - after"
-        print result.to_dict()
-        print "\n"
         return result
 
     def is_builtin_function(self, function_name, aggregate):
         return function_name in available_aggregate_functions()
 
-    # Serve per implementare /cube/<name>/facts – list facts within a cell
-    # vedi https://pythonhosted.org/cubes/server.html#aggregation-and-browsing
     def facts(self, cell=None, fields=None, order=None, page=None, page_size=None,
               **options):
         """Return facts iterator."""
@@ -230,8 +201,6 @@ class MongogfsBrowser(AggregationBrowser):
 
         return facts
 
-    # Serve per implementare /cube/<name>/fact – return a single fact
-    # vedi https://pythonhosted.org/cubes/server.html#aggregation-and-browsing
     def fact(self, key):
         # TODO make it possible to have a fact key that is not an ObjectId
         key_field = self.mapper.physical(self.mapper.attribute(self.cube.key))
@@ -245,8 +214,6 @@ class MongogfsBrowser(AggregationBrowser):
             item = to_json_safe(item)
         return item
 
-    # Serve per implementare /cube/<name>/members/<dim> – list dimension members
-    # vedi https://pythonhosted.org/cubes/server.html#aggregation-and-browsing
     def provide_members(self, cell, dimension, depth=None, hierarchy=None,
                         levels=None, attributes=None, page=None,
                         page_size=None, order=None):
@@ -285,403 +252,74 @@ class MongogfsBrowser(AggregationBrowser):
     def _in_same_collection(self, physical_ref):
         return (physical_ref.database == self.mapper.database) and (physical_ref.collection == self.mapper.collection)
 
-    def _build_query_and_fields(self, cell, attributes, for_project=False):
-        """Returns a tuple (`query`, `fields`). If `for_project` is `True`,
-        then the values are transformed using `project`, otherwise they are
-        transformed usin the `match` expression."""
-        # print "\n"
-        # print "mongodbgfs backend browser.py -- _build_query_and_fields \n cell : %s \n attributes : %s \n for_project : %s" % (cell, attributes, for_project)
-        # print "\n"
+
+    def _build_query_and_fields_gfs(self, cell, attributes, for_project=False):
+
         find_clauses = []
         query = {}
 
-        if not for_project:
-            # TODO: __query__ is for backward compatibility, might be removed
-            # later
-
-            query_base = self.cube.mappings.get("__query__", self.query_filter)
-            if query_base:
-                query_base = copy.deepcopy(query_base)
-                query.update(query_base)
-
-        find_clauses = []
-        for cut in cell.cuts:
-            find_clauses += self._query_conditions_for_cut(cut, for_project)
-
-        if find_clauses:
-            query.update({"$and": find_clauses}) # {'$match': {'$and': [{u'filename': 'N-32-50_ul_2000_s.tif'}
-
-        fields = {}
-
-        for attribute in attributes or []:
-            phys = self.mapper.physical(attribute)
-            if not self._in_same_collection(phys):
-                raise ValueError("Cannot fetch field that is in different "
-                                 "collection than this browser: %r" % phys)
-            if for_project:
-                expr = phys.project_expression()
-            else:
-                expr = phys.match_expression(True)
-
-            fields[escape_level(attribute.ref())] = expr
-
-        # print "query"
-        # print(query)
-        # print "fields"
-        # print(fields)
-        # print "\n"
-        return query, fields
-
-    def _build_query_and_fields_gfs(self, cell, attributes, for_project=False):
-        print "\n"
-        print "mongodbgfs backend browser.py -- _build_query_and_fields_gfs \n cell : %s \n attributes : %s \n for_project : %s" % (cell, attributes, for_project)
-        print "\n"
-
-        # I parametri che ho a disposizione per costruire la query sono dati dal
-        # elemento su cui ho effettuato il cut
-        # - cell : metadata.cc
-
-        find_clauses = []
         ids = []
         for cut in cell.cuts:
             find_clauses += self._query_conditions_for_cut(cut, for_project)
 
-        print find_clauses
-        # ricavo tutti gli _id dove metadata.cc corrisponde al valore passato
-        # id_list = self.data_store.find(find_clauses[0])
-        # print id_list
-        for id_list in self.data_store.find(find_clauses[0]) :
+        if find_clauses:
+            query.update({"$and": find_clauses})
+
+        for id_list in self.data_store.find(query) :
             ids.append(id_list['_id'])
 
-        return ids
+        return query, ids
 
     def _do_aggregation_query_gfs(self, cell, aggregates, attributes, drilldown,
                               split, order, page, page_size):
-        print "\n"
-        print "mongodbgfs backend browser.py -- _do_aggregation_query_gfs \n cell : %s \n aggregates : %s \n attributes : %s \n drilldown : %s \n split : %s \n order : %s \n page : %s \n page_size : %s" % (cell, aggregates, attributes, drilldown, split, order, page, page_size)
-        print "\n"
-        # determine query for cell cut
 
+        # From the cell element
+        # the _build_query_and_fields_gfs must return :
+        # query_obj -- to calculate the record count
+        # fileids_list -- that contain the file object ids for querying gridfs
+        query_obj, fileids_list = self._build_query_and_fields_gfs(cell, attributes)
 
-        test = self._build_query_and_fields_gfs(cell, attributes)
-        print test
-
-        # agg_array = []
-        count = 0
-        for objectid in test:
-            grid_out = self.fs.get(objectid)
-            # # print(grdout.length)
-            # # contents = grid_out.read()
-            # grid_out = self.fsbucket.open_download_stream_by_name("mdd_test_2.tif")
-            # # Use a virtual memory file, which is named like this
-            vsipath = '/vsimem/from_mongodb'
-            #
-            # # http://gis.stackexchange.com/questions/130139/downloading-raster-data-into-python-from-postgis-using-psycopg2
-            # # http://gis.stackexchange.com/questions/75891/in-python-reading-a-gdal-raster-from-memory-instead-of-a-file
-            # # http://erouault.blogspot.it/2012/05/new-gdal-virtual-file-system-to-read.html
-            # # GDAL has a Memory Driver and a PostGIS driver. ???
-            #
-            gdal.FileFromMemBuffer(vsipath, grid_out.read())
-            ds = gdal.Open(vsipath)
-            #
-            # print ds.GetMetadata()
-            # print "[ RASTER BAND COUNT ]: ", ds.RasterCount
-            #
-            # # get the band2 data array
-            # # Bisogna implmentare il parametro per definire quale band estrarre
-            band = ds.GetRasterBand(2)
-            arr = band.ReadAsArray()
-            print arr.shape
-            if count == 0 :
-                 agg_array = arr
-                 count = 1
-            else :
-                 agg_array += arr
-
-            # # Close and clean up virtual memory file
-            ds = band = None
-            gdal.Unlink(vsipath)
-
-        print agg_array.shape
-        print agg_array
-        # return agg_array
-        # ritorna -summary- AggregationResult attribute
-        # e -items==cells- AggregationResult attribute
-        # verso provide_aggregate
-        # se non si richiesto un drilldown cells is empty che is il nostro caso
-        return (agg_array, [])
-
-        # TODO Nota che rispetto a provide_aggrgate abbiamo il parametro attributes in plus
-    def _do_aggregation_query(self, cell, aggregates, attributes, drilldown,
-                              split, order, page, page_size):
-        # print "\n"
-        # print "mongodbgfs backend browser.py -- _do_aggregation_query \n cell : %s \n aggregates : %s \n attributes : %s \n drilldown : %s \n split : %s \n order : %s \n page : %s \n page_size : %s" % (cell, aggregates, attributes, drilldown, split, order, page, page_size)
-        # print "\n"
-        # determine query for cell cut
-        query_obj, fields_obj = self._build_query_and_fields(cell, attributes)
-        # test = self._build_query_and_fields_gfs(cell, attributes)
-        # print test
-
-        # If no drilldown or split, only one measure, and only aggregations to
-        # do on it are count or identity, no aggregation pipeline needed.
-        if (not drilldown and not split) \
-                and len(aggregates) == 1 \
-                and aggregates[0].function in ("count", "identity"):
-
-            self.logger.debug("doing plain aggregation")
-            return (self.data_store.find(query_obj).count(), [])
-
-        # TODO: do we need this check here?
-        # if not aggregates:
-        #     raise ArgumentError("No aggregates provided.")
-
-
-        group_id = {}
-
-        # prepare split-related projection of complex boolean condition
-        if split:
-            split_query_like_obj, dummy = self._build_query_and_fields(split,
-                                                                       [],
-                                                                       for_project=True)
-            if split_query_like_obj:
-                fields_obj[escape_level(SPLIT_DIMENSION_NAME)] = split_query_like_obj
-                group_id[escape_level(SPLIT_DIMENSION_NAME)] = "$%s" % escape_level(SPLIT_DIMENSION_NAME)
-
-        # drilldown, fire up the pipeline
-
-        timezone_shift_processing = False
-        date_transform = lambda x:x
-
-        sort_obj = bson.son.SON()
-
-        if drilldown:
-            for dditem in drilldown:
-                dim, hier, levels = dditem.dimension, dditem.hierarchy, dditem.levels
-
-                # Special Mongo Date Hack for TZ Support
-                if dim and is_date_dimension(dim):
-                    is_utc = (self.timezone == tz_utc)
-                    phys = self.mapper.physical(levels[0].key)
-                    date_idx = phys.project_expression()
-
-                    # add to $match and $project expressions
-                    query_obj.update(phys.match_expression(1, op='$exists'))
-                    fields_obj[date_idx[1:]] = 1
-
-                    if is_utc and not ([l for l in levels if l.name == 'week']):
-                        possible_groups = {
-                            'year': {'$year': date_idx},
-                            'month': {'$month': date_idx},
-                            'day': {'$dayOfMonth': date_idx},
-                            'hour': {'$hour': date_idx},
-                            'minute': {'$minute': date_idx}
-                        }
-                        for lvl in levels:
-                            group_id[escape_level(lvl.key.ref())] = possible_groups[lvl.name]
-                            sort_obj["_id." + escape_level(lvl.key.ref())] = 1
-
-                    else:
-                        timezone_shift_processing = True
-                        group_id.update({
-                            'year': {'$year': date_idx},
-                            'month': {'$month': date_idx},
-                            'day': {'$dayOfMonth': date_idx},
-                            'hour': {'$hour': date_idx}
-                        })
-                        if levels[-1] == 'minute':
-                            group_id['minute'] = { '$minute': date_idx }
-
-                        def _date_transform(item, date_field):
-                            date_dict = {}
-                            for k in ['year', 'month', 'day', 'hour', 'minute']:
-                                if item['_id'].has_key(k):
-                                    date_dict[k] = item['_id'].pop(k)
-
-                            date = datetime(**date_dict)
-                            date = tz_utc.localize(date)
-                            date = date.astimezone(tz=self.timezone) # convert to browser timezone
-
-                            item['_id'][date_field] = date
-                            return item
-
-                        date_transform = partial(_date_transform, date_field=dim.name)
-
-                else:
-                    for level in levels:
-                        key_phys = self.mapper.physical(level.key)
-                        sort_obj["_id." + escape_level(level.key.ref())] = 1
-                        query_obj.update(key_phys.match_expression(1, op='$exists'))
-                        # this loop will include key
-                        for attr in level.attributes:
-                            fields_obj[escape_level(attr.ref())] = self.mapper.physical(attr).project_expression()
-                            group_id[escape_level(attr.ref())] = "$%s" % escape_level(attr.ref())
-
-        group_obj = { "_id": group_id }
-
-        aggregate_fn_pairs = []
-
-        for agg in aggregates or []:
-            if agg.function:
-                try:
-                    function = get_aggregate_function(agg.function)
-                except KeyError:
-                    continue
-            else:
-                function = None
-
-            phys = self.mapper.physical(agg)
-            fields_obj[escape_level(agg.ref())] = phys.project_expression()
-
-            if not self._in_same_collection(phys):
-                raise BrowserError("Measure cannot be in different database "
-                                   "or collection than browser: %r" % phys)
-
-            aggregate_fn_pairs.append( ( escape_level(agg.ref()), sum ) )
-
-
-            if phys.group:
-                group = phys.group
-            elif function:
-                group_applicator = function["group_by"]
-                group = group_applicator(escape_level(agg.ref()))
-            else:
-                raise ModelError("Neither function or mapping group specified "
-                                 "for aggregate '%s' in cube '%s'"
-                                 % (str(agg), str(self.cube)))
-
-            group_obj[ escape_level(agg.ref()) ] = group
-
-        pipeline = self.cube.mappings.get("__pipeline__")
-        print "PIPELINE 1 : %s" % pipeline
-        if pipeline:
-            # Get a copy of pipeline
-            pipeline = list(pipeline)
-        else:
-            pipeline = []
-
+        # pipeline for aggregate request to mongodb to obtain back a record count
+        pipeline = []
         pipeline.append({ "$match": query_obj })
-        if fields_obj:
-            pipeline.append({ "$project": fields_obj })
-        pipeline.append({ "$group": group_obj })
+        pipeline.append({ "$project": {'record_count': '$record_count'} })
+        pipeline.append({ "$group": {'record_count': {'$sum': 1}, '_id': {}} })
 
-        if not timezone_shift_processing:
-            if order:
-                obj = {
-                    "$sort": self._order_to_sort_object(order)
-                }
-                pipeline.append(obj)
-            elif len(sort_obj):
-                pipeline.append({ "$sort": sort_obj })
+        results = self.data_store.aggregate(pipeline) # aggregate respect to mongodb
+        result_agg = []
+        for record_count in results:
+            result_items = record_count
+        band_id = []
+        for item in aggregates :
+            if item.measure is not None:
+                dicto = {'band':int(item.measure),'name':item.name, 'function':item.function}
+                band_id.append(dicto)
 
-        if not timezone_shift_processing and page and page > 0:
-            pipeline.append({ "$skip": page * page_size })
+        for bands in band_id :
+            count = 0
+            for objectid in fileids_list:
+                grid_out = self.fs.get(objectid)
+                # # Use a virtual memory file, which is named like this
+                vsipath = '/vsimem/from_mongodb'
+                gdal.FileFromMemBuffer(vsipath, grid_out.read())
+                ds = gdal.Open(vsipath)
+                # # get the band data array
+                band = ds.GetRasterBand(bands['band'])
+                arr = band.ReadAsArray()
+                if count == 0 :
+                     agg_array = arr
+                     count = 1
+                else :
+                     agg_array += arr
 
-        if not timezone_shift_processing and page_size and page_size > 0:
-            pipeline.append({ "$limit": page_size })
+                # # Close and clean up virtual memory file
+                ds = band = None
+                gdal.Unlink(vsipath)
 
-        result_items = []
-        self.logger.debug("PIPELINE: %s", pipeline)
-        print "PIPELINE 2 : %s" %pipeline
-        # test = self.data_store.aggregate(pipeline) # mongodb.aggregate query
-        # print "-------------"
-        # print(list(test))
-        print "-------------"
-        # results = self.data_store.aggregate(pipeline).get('result', [])
-        results = self.data_store.aggregate(pipeline) # mongodb.aggregate query
-        results = [date_transform(r) for r in results]
+            result_items[bands['name']] = agg_array
 
-        print(results)
-        if timezone_shift_processing:
-            dategrouping = ['year', 'month', 'week', 'day', 'hour', 'minute']
-            datenormalize = ['year', 'month', 'week', 'dow', 'day', 'hour', 'minute']
-
-            date_field = None
-            filter_so_far = False
-            # calculate correct date:level
-            for dditem in drilldown:
-                if dditem.dimension and is_date_dimension(dditem.dimension):
-                    date_field = dditem.dimension.name
-                    dategrouping = [str(l).lower() for l in dditem.levels]
-                    for dg in dategrouping:
-                        datenormalize.remove(dg)
-
-                    # TODO don't use magic _sf string for sofar
-                    if SO_FAR_DIMENSION_REGEX.match(dditem.dimension.name):
-                        filter_so_far = True
-                    break
-
-            def _date_key(item, dategrouping=['year', 'month', 'week', 'day', 'hour', 'minute']):
-                # sort group on date
-                dt = item['_id'][date_field]
-                key = [self.datesupport.datepart_functions.get(dp)(dt) for dp in dategrouping]
-
-                # add remainder elements to sort and group
-                for k, v in sorted(item['_id'].items(), key=lambda x:x[0]):
-                    if k != date_field:
-                        key.append(v)
-                return key
-
-            if dategrouping[-1] == 'week' and 'year' in dategrouping:
-                dategrouping.remove('year') # year included in week calc because week year might change
-
-
-            if filter_so_far:
-                filt = self.datesupport.so_far_filter(datetime.utcnow(), dategrouping[-1], key=lambda x:x['_id'][date_field])
-                results = filter(filt, results)
-
-
-            # sort and group [date_parts,...,non-date parts]
-            results = sorted(results, key=partial(_date_key, dategrouping=[ ("dow_sort" if x == "dow" else x) for x in dategrouping ]))
-            groups = groupby(results, key=partial(_date_key, dategrouping=dategrouping))
-
-            def _date_norm(item, datenormalize, dategrouping):
-                dt = item['_id'].pop(date_field)
-
-                if dategrouping[-1] == 'week':
-                    dt= self.datesupport.get_week_end_date(dt)
-
-                for dp in dategrouping:
-                    item['_id']['%s.%s' % (date_field, dp)] = self.datesupport.datepart_functions.get(dp)(dt)
-
-                return item
-
-            formatted_results = []
-            for g in groups:
-                item = {}
-                items = [i for i in g[1]]
-
-                item.update(items[0])
-
-                for agg_fn_pair in aggregate_fn_pairs:
-                    item[ agg_fn_pair[0] ] = agg_fn_pair[1]([d[ agg_fn_pair[0] ] for d in items])
-
-                item = _date_norm(item, datenormalize, dategrouping)
-                formatted_results.append(item)
-
-            if order:
-                formatted_results = complex_sorted(formatted_results, order)
-
-            if page and page_size:
-                idx = page*page_size
-                formatted_results = formatted_results[idx:idx + page_size]
-
-            results = formatted_results
-
-        for item in results:
-            new_item = {}
-            for k, v in item['_id'].items():
-                new_item[unescape_level(k)] = v
-            for agg_fn_pair in aggregate_fn_pairs:
-                new_item[ unescape_level(agg_fn_pair[0]) ] = item [ agg_fn_pair[0] ]
-            result_items.append(new_item)
-        print"_do_aggregation_query result_items"
-        print (result_items)
-        print "\n"
-        # ritorna -summary- AggregationResult attribute
-        # e -items==cells- AggregationResult attribute
-        # verso provide_aggregate
-        # se non si richiesto un drilldown cells is empty che is il nostro caso
-        return (None, result_items) if (drilldown or split) else (result_items[0], [])
+        result_agg.append(result_items)
+        return (result_agg, [])
 
     def _build_date_for_cut(self, hier, path, is_end=False):
         """Constructs a date from timestamp."""
@@ -712,6 +350,7 @@ class MongogfsBrowser(AggregationBrowser):
         return self.timezone.localize(dt).astimezone(tz_utc)
 
     def _query_conditions_for_cut(self, cut, for_project=False):
+
         conds = []
         cut_dimension = self.cube.dimension(cut.dimension)
         cut_hierarchy = cut_dimension.hierarchy(cut.hierarchy)
